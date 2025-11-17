@@ -459,15 +459,18 @@ renderCUDA(
 	const float2* __restrict__ points_xy_image,
 	const float4* __restrict__ conic_opacity,
 	const float* __restrict__ colors,
+	const float* __restrict__ semantic_features,
 	const float* __restrict__ depths,
 	const float* __restrict__ final_Ts,
 	const uint32_t* __restrict__ n_contrib,
 	const float* __restrict__ dL_dpixels,
+	const float* __restrict__ dL_dfeatures,
 	const float* __restrict__ dL_invdepths,
 	float3* __restrict__ dL_dmean2D,
 	float4* __restrict__ dL_dconic2D,
 	float* __restrict__ dL_dopacity,
 	float* __restrict__ dL_dcolors,
+	float* __restrict__ dL_dsemantic_features,
 	float* __restrict__ dL_dinvdepths
 )
 {
@@ -492,6 +495,7 @@ renderCUDA(
 	__shared__ float2 collected_xy[BLOCK_SIZE];
 	__shared__ float4 collected_conic_opacity[BLOCK_SIZE];
 	__shared__ float collected_colors[C * BLOCK_SIZE];
+	__shared__ float collected_semantic_features[NUM_SEMANTIC_CHANNELS * BLOCK_SIZE];
 	__shared__ float collected_depths[BLOCK_SIZE];
 
 
@@ -507,18 +511,23 @@ renderCUDA(
 
 	float accum_rec[C] = { 0 };
 	float dL_dpixel[C];
+	float accum_semantic_rec[NUM_SEMANTIC_CHANNELS] = { 0 };
+	float dL_dfeature[NUM_SEMANTIC_CHANNELS];
 	float dL_invdepth;
 	float accum_invdepth_rec = 0;
 	if (inside)
 	{
 		for (int i = 0; i < C; i++)
 			dL_dpixel[i] = dL_dpixels[i * H * W + pix_id];
+		for (int i = 0; i < NUM_SEMANTIC_CHANNELS; i++)
+			dL_dfeature[i] = dL_dfeatures[i * H * W + pix_id];
 		if(dL_invdepths)
 		dL_invdepth = dL_invdepths[pix_id];
 	}
 
 	float last_alpha = 0;
 	float last_color[C] = { 0 };
+	float last_semantic[NUM_SEMANTIC_CHANNELS] = { 0 };
 	float last_invdepth = 0;
 
 
@@ -542,6 +551,8 @@ renderCUDA(
 			collected_conic_opacity[block.thread_rank()] = conic_opacity[coll_id];
 			for (int i = 0; i < C; i++)
 				collected_colors[i * BLOCK_SIZE + block.thread_rank()] = colors[coll_id * C + i];
+			for (int i = 0; i < NUM_SEMANTIC_CHANNELS; i++)
+				collected_semantic_features[i * BLOCK_SIZE + block.thread_rank()] = semantic_features[coll_id * NUM_SEMANTIC_CHANNELS + i];
 
 			if(dL_invdepths)
 			collected_depths[block.thread_rank()] = depths[coll_id];
@@ -591,6 +602,20 @@ renderCUDA(
 				// Atomic, since this pixel is just one of potentially
 				// many that were affected by this Gaussian.
 				atomicAdd(&(dL_dcolors[global_id * C + ch]), dchannel_dcolor * dL_dchannel);
+			}
+			
+			// Propagate gradients to per-Gaussian semantic features
+			for (int ch = 0; ch < NUM_SEMANTIC_CHANNELS; ch++)
+			{
+				const float sf = collected_semantic_features[ch * BLOCK_SIZE + j];
+				// Update last semantic feature (to be used in the next iteration)
+				accum_semantic_rec[ch] = last_alpha * last_semantic[ch] + (1.f - last_alpha) * accum_semantic_rec[ch];
+				last_semantic[ch] = sf;
+
+				const float dL_dfeaturechannel = dL_dfeature[ch];
+				dL_dalpha += (sf - accum_semantic_rec[ch]) * dL_dfeaturechannel;
+				// Update the gradients w.r.t. semantic features of the Gaussian.
+				atomicAdd(&(dL_dsemantic_features[global_id * NUM_SEMANTIC_CHANNELS + ch]), dchannel_dcolor * dL_dfeaturechannel);
 			}
 			// Propagate gradients from inverse depth to alphaas and
 			// per Gaussian inverse depths
@@ -720,15 +745,18 @@ void BACKWARD::render(
 	const float2* means2D,
 	const float4* conic_opacity,
 	const float* colors,
+	const float* semantic_features,
 	const float* depths,
 	const float* final_Ts,
 	const uint32_t* n_contrib,
 	const float* dL_dpixels,
+	const float* dL_dfeatures,
 	const float* dL_invdepths,
 	float3* dL_dmean2D,
 	float4* dL_dconic2D,
 	float* dL_dopacity,
 	float* dL_dcolors,
+	float* dL_dsemantic_features,
 	float* dL_dinvdepths)
 {
 	renderCUDA<NUM_CHANNELS> << <grid, block >> >(
@@ -739,15 +767,18 @@ void BACKWARD::render(
 		means2D,
 		conic_opacity,
 		colors,
+		semantic_features,
 		depths,
 		final_Ts,
 		n_contrib,
 		dL_dpixels,
+		dL_dfeatures,
 		dL_invdepths,
 		dL_dmean2D,
 		dL_dconic2D,
 		dL_dopacity,
 		dL_dcolors,
+		dL_dsemantic_features,
 		dL_dinvdepths
 		);
 }
