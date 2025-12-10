@@ -398,9 +398,10 @@ renderCUDA(
 		for (int ch = 0; ch < CHANNELS; ch++)
 			out_color[ch * H * W + pix_id] = C[ch] + T * bg_color[ch];
 
-		// Write semantic features
+		// Write semantic features with normalization
+		// Normalize by accumulated alpha (1-T) so output sums to 1
 		for (int ch = 0; ch < NUM_SEMANTIC_CHANNELS; ch++)
-			out_feature_map[ch * H * W + pix_id] = SF[ch];
+			out_feature_map[ch * H * W + pix_id] = SF[ch] * (1.0f / (1.0f - T));
 
 		if (invdepth)
 		invdepth[pix_id] = expected_invdepth;// 1. / (expected_depth + T * 1e3);

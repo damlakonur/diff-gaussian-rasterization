@@ -105,8 +105,9 @@ class _RasterizeGaussians(torch.autograd.Function):
         args = (raster_settings.bg,
                 means3D, 
                 radii, 
-                colors_precomp,
+                colors_precomp, 
                 semantic_feature, 
+                opacities,  # FIXED: Added missing opacities argument
                 scales, 
                 rotations, 
                 raster_settings.scale_modifier, 

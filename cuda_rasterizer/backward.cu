@@ -605,17 +605,31 @@ renderCUDA(
 			}
 			
 			// Propagate gradients to per-Gaussian semantic features
+			// for (int ch = 0; ch < NUM_SEMANTIC_CHANNELS; ch++)
+			// {
+			// 	const float sf = collected_semantic_features[ch * BLOCK_SIZE + j];
+			// 	// Update last semantic feature (to be used in the next iteration)
+			// 	// accum_semantic_rec[ch] = last_alpha * last_semantic[ch] + (1.f - last_alpha) * accum_semantic_rec[ch];
+			// 	// last_semantic[ch] = sf;
+
+			// 	const float dL_dfeaturechannel = dL_dfeature[ch];
+			// 	// dL_dalpha += (sf - accum_semantic_rec[ch]) * dL_dfeaturechannel;
+			// 	// Update the gradients w.r.t. semantic features of the Gaussian.
+			// 	atomicAdd(&(dL_dsemantic_features[global_id * NUM_SEMANTIC_CHANNELS + ch]), dchannel_dcolor * dL_dfeaturechannel);
+			// }
+			// TODO: check here
+			float denom = 1.0f - T;
+			denom = fmaxf(denom, 1e-6f);
+			
 			for (int ch = 0; ch < NUM_SEMANTIC_CHANNELS; ch++)
 			{
-				const float sf = collected_semantic_features[ch * BLOCK_SIZE + j];
-				// Update last semantic feature (to be used in the next iteration)
-				accum_semantic_rec[ch] = last_alpha * last_semantic[ch] + (1.f - last_alpha) * accum_semantic_rec[ch];
-				last_semantic[ch] = sf;
-
 				const float dL_dfeaturechannel = dL_dfeature[ch];
-				dL_dalpha += (sf - accum_semantic_rec[ch]) * dL_dfeaturechannel;
-				// Update the gradients w.r.t. semantic features of the Gaussian.
-				atomicAdd(&(dL_dsemantic_features[global_id * NUM_SEMANTIC_CHANNELS + ch]), dchannel_dcolor * dL_dfeaturechannel);
+				const float dL_dSF = dL_dfeaturechannel / denom;   // normalization gradient
+			
+				atomicAdd(
+					&(dL_dsemantic_features[global_id * NUM_SEMANTIC_CHANNELS + ch]),
+					dchannel_dcolor * dL_dSF
+				);
 			}
 			// Propagate gradients from inverse depth to alphaas and
 			// per Gaussian inverse depths
